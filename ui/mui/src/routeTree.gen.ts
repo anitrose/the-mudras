@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as LearnRouteImport } from './routes/learn'
 import { Route as DetectRouteImport } from './routes/detect'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as PracticeMudraNameRouteImport } from './routes/practice.$mudraName'
 
 const LearnRoute = LearnRouteImport.update({
   id: '/learn',
@@ -28,35 +29,44 @@ const IndexRoute = IndexRouteImport.update({
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PracticeMudraNameRoute = PracticeMudraNameRouteImport.update({
+  id: '/practice/$mudraName',
+  path: '/practice/$mudraName',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
   '/learn': typeof LearnRoute
+  '/practice/$mudraName': typeof PracticeMudraNameRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
   '/learn': typeof LearnRoute
+  '/practice/$mudraName': typeof PracticeMudraNameRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/detect': typeof DetectRoute
   '/learn': typeof LearnRoute
+  '/practice/$mudraName': typeof PracticeMudraNameRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/detect' | '/learn'
+  fullPaths: '/' | '/detect' | '/learn' | '/practice/$mudraName'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/detect' | '/learn'
-  id: '__root__' | '/' | '/detect' | '/learn'
+  to: '/' | '/detect' | '/learn' | '/practice/$mudraName'
+  id: '__root__' | '/' | '/detect' | '/learn' | '/practice/$mudraName'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   DetectRoute: typeof DetectRoute
   LearnRoute: typeof LearnRoute
+  PracticeMudraNameRoute: typeof PracticeMudraNameRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -82,6 +92,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/practice/$mudraName': {
+      id: '/practice/$mudraName'
+      path: '/practice/$mudraName'
+      fullPath: '/practice/$mudraName'
+      preLoaderRoute: typeof PracticeMudraNameRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -89,6 +106,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   DetectRoute: DetectRoute,
   LearnRoute: LearnRoute,
+  PracticeMudraNameRoute: PracticeMudraNameRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

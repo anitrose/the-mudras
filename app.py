@@ -9,6 +9,7 @@ from collections import deque, Counter
 from flask_cors import CORS
 import csv
 import os
+from flask import send_from_directory
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:8080", "http://127.0.0.1:8080"]}})
@@ -36,7 +37,7 @@ mudra_info = {
 }
 
 prediction_buffer = deque(maxlen=20)
-current_prediction = {'mudra': '', 'confidence': 0, 'info': ''}
+current_prediction = {'mudra': '', 'confidence': 0, 'info': '', 'raw_mudra': '', 'raw_confidence': 0}
 current_landmarks = []
 cap = cv2.VideoCapture(0)
 
@@ -62,7 +63,7 @@ def generate_frames():
             for lm in landmarks:
                 cx, cy = int(lm.x * w), int(lm.y * h)
                 points.append((cx, cy))
-                cv2.circle(frame, (cx, cy), 5, (0, 255, 0), -1)
+                cv2.circle(frame, (cx, cy), 5, (0, 0, 0), -1)
 
             connections = [
                 (0,1),(1,2),(2,3),(3,4),
@@ -73,7 +74,7 @@ def generate_frames():
                 (5,9),(9,13),(13,17)
             ]
             for a, b in connections:
-                cv2.line(frame, points[a], points[b], (0, 200, 255), 2)
+                cv2.line(frame, points[a], points[b], (255,0,0), 2)
 
             row = []
             for lm in landmarks:
@@ -83,6 +84,9 @@ def generate_frames():
             confidence = max(model.predict_proba([row])[0])
             prediction_buffer.append(prediction)
             stable_prediction = Counter(prediction_buffer).most_common(1)[0][0]
+
+            current_prediction['raw_mudra'] = stable_prediction
+            current_prediction['raw_confidence'] = round(confidence * 100, 1)
 
             if confidence > 0.5:
                 current_prediction['mudra'] = stable_prediction
@@ -118,6 +122,28 @@ def video_feed():
 def prediction():
     return jsonify(current_prediction)
 
+@app.route('/reference/<mudra_name>')
+def reference(mudra_name):
+    import json
+    with open('datasets/reference_landmarks.json', 'r') as f:
+        references = json.load(f)
+    if mudra_name in references:
+        return jsonify({'mudra': mudra_name, 'landmarks': references[mudra_name]})
+    else:
+        return jsonify({'error': 'Mudra not found'}), 404
+    
+
+
+@app.route('/sample_image/<mudra_name>')
+def sample_image(mudra_name):
+    filename = f"{mudra_name.lower()}_themed.jpg"
+    folder = os.path.join('datasets', 'themed')
+    filepath = os.path.join(folder, filename)
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'not found'}), 404
+    return send_from_directory(folder, filename)
+
+
 @app.route('/feedback', methods=['POST'])
 def feedback():
     data = request.get_json()
@@ -141,6 +167,8 @@ def feedback():
             writer = csv.writer(f)
             row_data = list(current_landmarks) + [mudra]
             writer.writerow(row_data)
+        
+            
 
     return jsonify({'status': 'saved'})
 if __name__ == '__main__':
