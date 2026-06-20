@@ -61,7 +61,11 @@ function PracticePage() {
   const [cameraStarted, setCameraStarted] = useState(false);
   const [detected, setDetected] = useState("");
   const [confidence, setConfidence] = useState(0);
+  const [liveLandmarks, setLiveLandmarks] = useState<number[] | null>(null);
+  const [suggestion, setSuggestion] = useState<string>("");
+  const [suggestionFinger, setSuggestionFinger] = useState<string | null>(null);
   const [matched, setMatched] = useState(false);
+  const [ignoreUntil, setIgnoreUntil] = useState<number>(0);
   const points = referenceLandmarks ? getNormalizedPoints(referenceLandmarks) : [];
 
   // Fetch reference skeleton
@@ -92,7 +96,13 @@ function PracticePage() {
         const data = await res.json();
         setDetected(data.mudra || "");
         setConfidence(data.confidence || 0);
-        if (data.mudra === mudraName) {
+        // Server now returns raw landmarks for guidance
+        if (data.landmarks && data.landmarks.length >= 63) {
+          setLiveLandmarks(data.landmarks as number[]);
+        } else {
+          setLiveLandmarks(null);
+        }
+        if (data.mudra === mudraName && Date.now() >= ignoreUntil) {
           setMatched(true);
         }
       } catch (err) {
@@ -101,9 +111,89 @@ function PracticePage() {
     };
 
     fetchPrediction();
-    const interval = setInterval(fetchPrediction, 1000);
+    // faster polling for live suggestions
+    const interval = setInterval(fetchPrediction, 400);
     return () => clearInterval(interval);
   }, [cameraStarted, matched, mudraName]);
+
+  // Compute a single prioritized suggestion whenever liveLandmarks or reference changes
+  useEffect(() => {
+    if (!liveLandmarks || !referenceLandmarks) {
+      setSuggestion("");
+      setSuggestionFinger(null);
+      return;
+    }
+
+    const pt = (arr: number[], i: number) => ({ x: arr[i * 3], y: arr[i * 3 + 1] });
+
+    // compute hand span from current landmarks
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (let i = 0; i < 21; i++) { xs.push(liveLandmarks[i * 3]); ys.push(liveLandmarks[i * 3 + 1]); }
+    const handSpan = Math.max(...xs) - Math.min(...xs) || Math.max(...ys) - Math.min(...ys) || 0.1;
+
+    const tips = { thumb:4, index:8, middle:12, ring:16, pinky:20 };
+    const mcps = { thumb:1, index:5, middle:9, ring:13, pinky:17 };
+
+    type Score = { finger: string; score: number; type: 'close'|'open'|'pos'; detail?: any };
+    const scores: Score[] = [];
+
+    const closedThreshold = handSpan * 0.18;
+    const posThresh = handSpan * 0.05;
+
+    for (const finger of Object.keys(tips)) {
+      const t = tips[finger as keyof typeof tips];
+      const m = mcps[finger as keyof typeof mcps];
+      const refDist = Math.hypot(pt(referenceLandmarks, t).x - pt(referenceLandmarks, m).x, pt(referenceLandmarks, t).y - pt(referenceLandmarks, m).y);
+      const curDist = Math.hypot(pt(liveLandmarks, t).x - pt(liveLandmarks, m).x, pt(liveLandmarks, t).y - pt(liveLandmarks, m).y);
+
+      const wantsClosed = refDist < closedThreshold;
+
+      if (wantsClosed) {
+        // higher score when curDist much larger than desired
+        const diff = (curDist - refDist) / (handSpan || 1);
+        if (diff > 0.06) scores.push({ finger, score: diff, type: 'close' });
+      } else {
+        const diff = (refDist - curDist) / (handSpan || 1);
+        if (diff > 0.06) scores.push({ finger, score: diff, type: 'open' });
+      }
+
+      // positional offset of tip
+      const dx = pt(liveLandmarks, t).x - pt(referenceLandmarks, t).x;
+      const dy = pt(liveLandmarks, t).y - pt(referenceLandmarks, t).y;
+      const posMag = Math.hypot(dx, dy) / (handSpan || 1);
+      if (posMag > 0.06) scores.push({ finger, score: posMag * 0.7, type: 'pos', detail: { dx, dy } });
+    }
+
+    if (scores.length === 0) {
+      setSuggestion("");
+      setSuggestionFinger(null);
+      return;
+    }
+
+    // pick highest score
+    scores.sort((a,b) => b.score - a.score);
+    const top = scores[0];
+
+    const fingerName = top.finger === 'thumb' ? 'thumb' : `${top.finger} finger`;
+    if (top.type === 'close') {
+      setSuggestion(`Close your ${fingerName}`);
+      setSuggestionFinger(top.finger);
+    } else if (top.type === 'open') {
+      setSuggestion(`Open your ${fingerName}`);
+      setSuggestionFinger(top.finger);
+    } else {
+      const dx = top.detail.dx;
+      const dy = top.detail.dy;
+      const absdx = Math.abs(dx);
+      const absdy = Math.abs(dy);
+      let dir = '';
+      if (absdx > absdy) dir = dx > 0 ? 'move left' : 'move right';
+      else dir = dy > 0 ? 'move up' : 'move down';
+      setSuggestion(`${fingerName}: ${dir}`);
+      setSuggestionFinger(top.finger);
+    }
+  }, [liveLandmarks, referenceLandmarks]);
 
   const isMatch = detected === mudraName;
   const isWrong = detected !== "" && detected !== mudraName;
@@ -136,14 +226,28 @@ function PracticePage() {
             <div className="text-[10px] uppercase tracking-[0.4em] text-gold mb-4">Reference Pose</div>
             <div className="aspect-square w-full flex items-center justify-center">
               {referenceError ? (
-  <div className="flex flex-col items-center text-center px-6">
-    <div className="font-serif text-2xl mb-2 text-foreground">Not Available Yet</div>
-    <p className="text-sm text-muted-foreground max-w-xs">
-      Live practice currently supports the 10 core mudras. This one is coming soon.
-    </p>
-  </div>
-) : referenceLandmarks ? (
-  <svg viewBox="0 0 400 400" className="w-full h-full">
+                <div className="flex flex-col items-center text-center px-6">
+                  <div className="font-serif text-2xl mb-2 text-foreground">Not Available Yet</div>
+                  <p className="text-sm text-muted-foreground max-w-xs">
+                    Live practice currently supports the 10 core mudras. This one is coming soon.
+                  </p>
+                </div>
+              ) : referenceLandmarks ? (
+                <img
+                  src={`http://127.0.0.1:5000/sample_image/${mudraName}`}
+                  alt={`${mudraName} reference`}
+                  className="w-full h-full object-contain rounded-xl"
+                  onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                />
+              ) : (
+                <div className="text-muted-foreground text-sm">Loading reference...</div>
+              )}
+            </div>
+
+            {/* Small coordinate skeleton under the image */}
+            {!referenceError && referenceLandmarks && (
+              <div className="mt-4 mx-auto w-48">
+                <svg viewBox="0 0 400 400" className="w-full h-full">
                   {CONNECTIONS.map(([a, b], i) => (
                     <line
                       key={i}
@@ -167,17 +271,7 @@ function PracticePage() {
                     />
                   ))}
                 </svg>
-              ) : (
-                <div className="text-muted-foreground text-sm">Loading reference...</div>
-              )}
-            </div>
-             {!referenceError && (
-              <img
-                src={`http://127.0.0.1:5000/sample_image/${mudraName}`}
-                alt={`${mudraName} reference`}
-                className="mt-4 mx-auto rounded-xl max-h-64 object-contain"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-              />
+              </div>
             )}
             <div className="mt-4 text-center font-serif text-5xl gold-text">
               {sanskritLookup[mudraName] || mudraName}
@@ -203,11 +297,23 @@ function PracticePage() {
                         {confidence.toFixed(1)}% Confidence
                       </div>
                       <button
-                        onClick={() => setMatched(false)}
+                        onClick={() => {
+                          setMatched(false);
+                          setDetected("");
+                          // ignore matches for 2s so the server prediction doesn't immediately re-match
+                          setIgnoreUntil(Date.now() + 2000);
+                        }}
                         className="px-8 py-3 border-2 border-gold text-gold font-sans text-sm uppercase tracking-widest hover:bg-gold hover:text-black transition-all duration-300"
                       >
                         Try Again →
                       </button>
+                    </div>
+                  )}
+                  {/* Live suggestion panel */}
+                  {!matched && suggestion && (
+                    <div className="absolute bottom-4 left-4 bg-black/70 text-sm text-white rounded-lg p-3 max-w-xs">
+                      <div className="font-semibold mb-1">Suggestion</div>
+                      <div className="truncate">{suggestion}</div>
                     </div>
                   )}
                 </>

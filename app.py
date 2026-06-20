@@ -39,6 +39,7 @@ mudra_info = {
 prediction_buffer = deque(maxlen=20)
 current_prediction = {'mudra': '', 'confidence': 0, 'info': '', 'raw_mudra': '', 'raw_confidence': 0}
 current_landmarks = []
+current_raw_landmarks = []
 cap = cv2.VideoCapture(0)
 
 def generate_frames():
@@ -80,6 +81,10 @@ def generate_frames():
             for lm in landmarks:
                 row.extend([lm.x, lm.y, lm.z])
 
+            # Always keep the latest raw landmarks (normalized coordinates)
+            current_raw_landmarks.clear()
+            current_raw_landmarks.extend(row)
+
             prediction = model.predict([row])[0]
             confidence = max(model.predict_proba([row])[0])
             prediction_buffer.append(prediction)
@@ -99,6 +104,16 @@ def generate_frames():
                 current_prediction['confidence'] = 0
                 current_prediction['info'] = ''
                 current_landmarks.clear()
+        else:
+            # No hand detected in this frame — clear raw landmarks so frontend
+            # doesn't act on stale coordinates and show suggestions prematurely.
+            current_raw_landmarks.clear()
+            # Also clear current prediction to avoid stale matches
+            current_prediction['mudra'] = ''
+            current_prediction['confidence'] = 0
+            current_prediction['info'] = ''
+            current_prediction['raw_mudra'] = ''
+            current_prediction['raw_confidence'] = 0
 
         ret2, buffer = cv2.imencode('.jpg', frame)
         frame_bytes = buffer.tobytes()
@@ -120,7 +135,11 @@ def video_feed():
 
 @app.route('/prediction')
 def prediction():
-    return jsonify(current_prediction)
+    # Include the latest raw landmarks (even if confidence is low) so the frontend can provide
+    # live interactive guidance. Return an empty list if none available.
+    resp = dict(current_prediction)
+    resp['landmarks'] = list(current_raw_landmarks) if current_raw_landmarks else []
+    return jsonify(resp)
 
 @app.route('/reference/<mudra_name>')
 def reference(mudra_name):
